@@ -4,7 +4,7 @@
 #include <type_traits>
 
 
-namespace utils::detail::smf_selection {
+namespace phoebe::detail::smf_selection {
 
 
 template <typename Base>
@@ -136,4 +136,4 @@ template <typename Base, typename... Ts>
 using select_smf = select_move_assign<Base, Ts...>;
 
 
-} // namespace utils::detail::smf_selection
+} // namespace phoebe::detail::smf_selection

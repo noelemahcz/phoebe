@@ -3,7 +3,7 @@
 #include <string>
 
 
-using namespace utils;
+using namespace phoebe;
 
 
 using my_variant = variant<alt<"empty">, alt<"foo", int>, alt<"bar", std::pair<bool, double>>>;
@@ -33,4 +33,5 @@ inline constexpr my_variant3 var3_1 = {"empty1"_t};
 inline constexpr my_variant3 var3_2 = {"empty2"_t};
 
 
-int main() {}
+int main() {
+}

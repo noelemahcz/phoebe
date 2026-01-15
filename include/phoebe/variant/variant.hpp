@@ -3,12 +3,11 @@
 
 #include "../config.h"
 
-#include "../meta/list.hpp"
-#include "meta.hpp" // FIXME: Remove this header.
 #include "../meta/fstr.hpp"
+#include "../meta/list.hpp"
 #include "../meta/pack.hpp"
+#include "meta.hpp" // FIXME: Remove this header.
 #include "smf_selection.hpp"
-
 
 #include <cstddef>
 
@@ -17,7 +16,7 @@
 #include <utility>
 
 
-namespace utils {
+namespace phoebe {
 
 
 template <meta::fstr Tag, typename Type = void>
@@ -404,4 +403,4 @@ public:
 };
 
 
-} // namespace utils
+} // namespace phoebe
