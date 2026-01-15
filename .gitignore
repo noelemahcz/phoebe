@@ -1,0 +1,20 @@
+build/
+compile_commands.json
+
+# IDEs
+.idea/
+.vscode/
+
+# CMake
+CMakeUserPresets.json
+
+# Direnv
+.envrc
+.direnv/
+
+# Debuggers
+.gdbinit
+.lldbinit
+
+# Misc
+.cache/

@@ -1,0 +1,21 @@
+BasedOnStyle: LLVM
+AccessModifierOffset: -2
+AllowShortBlocksOnASingleLine: Never
+AllowShortFunctionsOnASingleLine: InlineOnly
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: true
+AlwaysBreakTemplateDeclarations: Yes
+ColumnLimit: 120
+ConstructorInitializerAllOnOneLineOrOnePerLine: true
+IndentWidth: 2
+MaxEmptyLinesToKeep: 2
+OneLineFormatOffRegex: '^// clang-format ignore$'
+PointerAlignment: Left
+QualifierAlignment: Custom
+QualifierOrder: [ inline, static, friend, constexpr, type, const, volatile, restrict ]
+SortIncludes: true
+SortUsingDeclarations: false
+SpaceBeforeParens: Custom
+SpaceBeforeParensOptions:
+  AfterRequiresInClause: true
+TabWidth: 2
