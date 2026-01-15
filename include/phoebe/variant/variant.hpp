@@ -26,6 +26,24 @@ struct alt {
 };
 
 
+template <meta::fstr Tag>
+struct tag_t {};
+
+template <meta::fstr Tag>
+inline constexpr tag_t<Tag> tag{};
+
+namespace variant_literals {
+template <meta::fstr Tag>
+consteval auto operator""_t() -> tag_t<Tag> {
+  return tag<Tag>;
+}
+} // namespace variant_literals
+
+// NOTE: `tag_t` should imply in-place semantics.
+// template <meta::fstr Tag> struct in_place_tag_t {};
+// template <meta::fstr Tag> inline constexpr in_place_tag_t<Tag> in_place_tag{};
+
+
 namespace variant_detail {
 
 inline constexpr auto npos = static_cast<std::size_t>(-1);
@@ -53,173 +71,15 @@ using alt_type = meta::pack::strict::at_t<Index, typename Alts::type...>;
 } // namespace variant_detail
 
 
-template <meta::fstr Tag>
-struct tag_t {};
-
-template <meta::fstr Tag>
-inline constexpr tag_t<Tag> tag{};
-
-namespace variant_literals {
-template <meta::fstr Tag>
-consteval auto operator""_t() -> tag_t<Tag> {
-  return tag<Tag>;
-}
-} // namespace variant_literals
-
-
-// NOTE: `tag_t` should imply in-place semantics.
-
-// template <meta::fstr Tag>
-// struct in_place_tag_t {};
-
-// template <meta::fstr Tag>
-// inline constexpr in_place_tag_t<Tag> in_place_tag{};
-
-
 namespace variant_detail {
 
-template <std::size_t Index, typename Alt>
-class variant_alt {
-public:
-  static constexpr std::size_t index = Index;
-  static constexpr meta::fstr tag = Alt::tag;
-  using type = Alt::type;
+template <typename Type>
+using is_not_void = std::negation<std::is_void<Type>>;
 
-public:
-  // Use `std::in_place_t` to disambiguate from copy/move constructors.
-  template <typename... Args>
-  constexpr explicit variant_alt(std::in_place_t, Args&&... args) /*noexcept*/ : value_(std::forward<Args>(args)...) {}
-
-private:
-  type value_;
-};
-
-template <std::size_t Index, meta::fstr Tag>
-class variant_alt<Index, alt<Tag>> {
-public:
-  static constexpr std::size_t index = Index;
-  static constexpr meta::fstr tag = Tag;
-  using type = void;
-
-public:
-  constexpr explicit variant_alt(std::in_place_t) noexcept {}
-};
-
-template <bool TriviallyDestructible, std::size_t Index, typename... Alts>
-union variant_storage {};
-
-template <bool TriviallyDestructible, std::size_t Index, typename Alt, typename... Tail>
-union variant_storage<TriviallyDestructible, Index, Alt, Tail...> {
-public:
-  template <typename... Args>
-  constexpr explicit variant_storage(std::in_place_index_t<0>, Args&&... args) /*noexcept*/
-      : head_(std::in_place, std::forward<Args>(args)...) {}
-
-  template <std::size_t I, typename... Args>
-  constexpr explicit variant_storage(std::in_place_index_t<I>, Args&&... args) /*noexcept*/
-      : tail_(std::in_place_index<I - 1>, std::forward<Args>(args)...) {}
-
-  variant_storage(variant_storage const&) = default;
-  variant_storage(variant_storage&&) = default;
-  variant_storage& operator=(variant_storage const&) = default;
-  variant_storage& operator=(variant_storage&&) = default;
-
-  constexpr ~variant_storage() requires TriviallyDestructible = default; // clang-format ignore
-  constexpr ~variant_storage() {}
-
-private:
-  NO_UNIQUE_ADDRESS variant_alt<Index, Alt> head_;
-  variant_storage<TriviallyDestructible, Index + 1, Tail...> tail_;
-};
-
-template <typename... Alts>
-class variant_base {
-public:
-  // FIXME: CPS version.
-  // template <template <typename...> typename F> using alts_with = F<Alts...>;
-  using alts = meta::list<Alts...>;
-  static constexpr std::size_t size = sizeof...(Alts);
-
-  static constexpr bool no_storage = (std::is_void_v<typename Alts::type> && ...);
-
-protected:
-  template <std::size_t Index, typename... Args>
-    requires no_storage
-  constexpr explicit variant_base(std::in_place_index_t<Index>) /*noexcept*/
-      : which_(Index) {}
-
-  template <std::size_t Index, typename... Args>
-  constexpr explicit variant_base(std::in_place_index_t<Index>, Args&&... args) /*noexcept*/
-      : storage_(std::in_place_index<Index>, std::forward<Args>(args)...), which_(Index) {}
-
-private:
-  using variant_storage_t = variant_storage<(std::is_trivially_destructible_v<typename Alts::type> && ...), 0, Alts...>;
-
-  // To avoid unnecessary recursive instantiation of `variant_storage`, which can be expensive.
-  struct empty_t {};
-  using storage_t = std::conditional_t<no_storage, empty_t, variant_storage_t>;
-
-  NO_UNIQUE_ADDRESS storage_t storage_;
-  std::size_t which_;
-};
-
-// template <bool TriviallyDestructible, std::size_t Index, typename... Tail>
-// union variant_storage<TriviallyDestructible, Index, void, Tail...> {
-// public:
-//   static constexpr std::size_t index = Index;
-//
-//   constexpr explicit variant_storage(std::in_place_index_t<0>) noexcept {}
-//
-//   template <std::size_t I, typename... Args>
-//   constexpr explicit variant_storage(std::in_place_index_t<I>, Args&&... args) /*noexcept*/
-//       : tail_(std::in_place_index<I - 1>, std::forward<Args>(args)...) {}
-//
-//   variant_storage(variant_storage const&) = default;
-//   variant_storage(variant_storage&&) = default;
-//   variant_storage& operator=(variant_storage const&) = default;
-//   variant_storage& operator=(variant_storage&&) = default;
-//
-//   constexpr ~variant_storage() requires TriviallyDestructible = default; // clang-format ignore
-//   constexpr ~variant_storage() {}
-//
-// private:
-//   variant_storage<TriviallyDestructible, Index, Tail...> tail_;
-// };
-
-
-// template <typename... Alts>
-// class variant_base {
-// public:
-//   using alts = meta::list<Alts...>;
-//   static constexpr auto size() noexcept -> std::size_t { return sizeof...(Alts); }
-//
-//   using storage_t =
-//       variant_storage<std::conjunction_v<std::is_trivially_destructible<typename Alts::type>...>, 0, Alts...>;
-//
-// protected:
-//   template <std::size_t Index, typename... Args>
-//   constexpr explicit variant_base(std::in_place_index_t<Index>, Args&&... args) /*noexcept*/
-//       : which_(Index), storage_(std::in_place_index<Index>, std::forward<Args>(args)...) {}
-//
-// private:
-//   std::size_t which_;
-//   storage_t storage_;
-// };
-//
-// template <typename... Alts>
-//   requires (std::is_void_v<typename Alts::type> && ...) // Strict eval is fine here.
-// class variant_base<Alts...> {
-// public:
-//   using alts = meta::list<Alts...>;
-//   static constexpr auto size() noexcept -> std::size_t { return sizeof...(Alts); }
-//
-// protected:
-//   template <std::size_t Index>
-//   constexpr explicit variant_base(std::in_place_index_t<Index>) noexcept : which_(Index) {}
-//
-// private:
-//   std::size_t which_;
-// };
+template <typename... Types>
+using non_void_types =
+    // meta::filter_t<meta::compose<std::negation, std::is_void>::type, meta::list<Types...>>;
+    meta::filter_t<is_not_void, meta::list<Types...>>;
 
 } // namespace variant_detail
 
@@ -245,13 +105,17 @@ struct storage {
 
 struct base {
   template <std::size_t Index, typename VariantBase, typename UnCVRefBase = std::remove_cvref_t<VariantBase>>
-    requires (Index < UnCVRefBase::size) // FIXME: Is the bounds check necessary here?
+    requires UnCVRefBase::has_storage && (Index < UnCVRefBase::size) // FIXME: Is these checks necessary here?
   static constexpr decltype(auto) get_alt(VariantBase&& base) /*noexcept*/ {
-    if constexpr (UnCVRefBase::no_storage) {
-      // FIXME: Use `variant_detail::alt_type` instead.
-      return variant_alt<Index, meta::list2::at_t<Index, typename UnCVRefBase::alts>>{std::in_place};
-    }
     return storage::get_alt(std::in_place_index<Index>, std::forward<VariantBase>(base).storage_);
+  }
+};
+
+struct variant {
+  template <std::size_t Index, typename Variant>
+  // TODO: Constraints.
+  static constexpr decltype(auto) get_alt(Variant&& var) /*noexcept*/ {
+    return base::get_alt<Index>(std::forward<Variant>(var).base());
   }
 };
 
@@ -290,10 +154,10 @@ struct dispatcher {
   // FIXME: Boundary check
   // FIXME: Should `std::type_identity_t` be used instead of the raw types?
   static constexpr decltype(auto) dispatch(Visitor visitor, VariantBases... bases) /*noexcept*/ {
-    using arg_indices = std::make_index_sequence<2 * sizeof...(ActiveIndices)>;
+    using arg_indices_t = std::make_index_sequence<2 * sizeof...(ActiveIndices)>;
     // No deduction happens above, so use `static_cast` instead of `std::forward`.
     // FIXME: Is `static_cast` necessary?
-    return dispatch_impl<arg_indices, Visitor, VariantBases...>(visitor, bases...);
+    return dispatch_impl<arg_indices_t, Visitor, VariantBases...>(visitor, bases...);
   }
 };
 
@@ -336,22 +200,95 @@ constexpr decltype(auto) visit(Visitor&& visitor, VariantBases&&... bases) /*noe
 
 namespace variant_detail {
 
-template <typename Type>
-using is_not_void = std::negation<std::is_void<Type>>;
+template <std::size_t Index, typename Alt>
+struct variant_alt {
+  static constexpr std::size_t index = Index;
+  static constexpr meta::fstr tag = Alt::tag;
+  using type = Alt::type;
 
-template <typename... Types>
-using non_void_types =
-    // meta::filter_t<meta::compose<std::negation, std::is_void>::type, meta::list<Types...>>;
-    meta::filter_t<is_not_void, meta::list<Types...>>;
+  // Use `std::in_place_t` to disambiguate from copy/move constructors.
+  template <typename... Args>
+  constexpr explicit variant_alt(std::in_place_t, Args&&... args) /*noexcept*/ : value(std::forward<Args>(args)...) {}
 
-template <typename... AllTypes>
-struct select_smf_ {
-  template <typename... NonVoidTypes>
-  using type = detail::smf_selection::select_smf<variant_base<AllTypes...>, NonVoidTypes...>;
+  type value;
+};
+
+template <std::size_t Index, meta::fstr Tag>
+struct variant_alt<Index, alt<Tag>> {
+  static constexpr std::size_t index = Index;
+  static constexpr meta::fstr tag = Tag;
+  using type = void;
+
+  constexpr explicit variant_alt(std::in_place_t) noexcept {}
+
+  // FIXME: Move to `config.h`.
+  // WORKAROUND: MSVC requires a non-empty member to correctly
+  // determine the active union member during constant evaluation.
+#if defined(_MSC_VER) && !defined(__clang__)
+  char dummy = 0;
+#endif
+};
+
+template <bool TriviallyDestructible, std::size_t Index, typename... Alts>
+union variant_storage {};
+
+template <bool TriviallyDestructible, std::size_t Index, typename Alt, typename... Tail>
+union variant_storage<TriviallyDestructible, Index, Alt, Tail...> {
+public:
+  template <typename... Args>
+  constexpr explicit variant_storage(std::in_place_index_t<0>, Args&&... args) /*noexcept*/
+      : head_(std::in_place, std::forward<Args>(args)...) {}
+
+  template <std::size_t I, typename... Args>
+  constexpr explicit variant_storage(std::in_place_index_t<I>, Args&&... args) /*noexcept*/
+      : tail_(std::in_place_index<I - 1>, std::forward<Args>(args)...) {}
+
+  variant_storage(variant_storage const&) = default;
+  variant_storage(variant_storage&&) = default;
+  variant_storage& operator=(variant_storage const&) = default;
+  variant_storage& operator=(variant_storage&&) = default;
+
+  constexpr ~variant_storage() requires TriviallyDestructible = default; // clang-format ignore
+  constexpr ~variant_storage() {}
+
+private:
+  /*NO_UNIQUE_ADDRESS*/ variant_alt<Index, Alt> head_;
+  variant_storage<TriviallyDestructible, Index + 1, Tail...> tail_;
+
+  friend struct access::storage;
 };
 
 template <typename... Alts>
-using select_smf = meta::apply_t<select_smf_<Alts...>::template type, non_void_types<typename Alts::type...>>;
+class variant_base {
+public:
+  // FIXME: CPS version.
+  // template <template <typename...> typename F> using alts_with = F<Alts...>;
+  using alts = meta::list<Alts...>;
+  static constexpr std::size_t size = sizeof...(Alts);
+
+  static constexpr bool has_storage = !(std::is_void_v<typename Alts::type> && ...);
+
+protected:
+  template <std::size_t Index, typename... Args>
+    requires (!has_storage)
+  constexpr explicit variant_base(std::in_place_index_t<Index>) /*noexcept*/
+      : which_(Index) {}
+
+  template <std::size_t Index, typename... Args>
+  constexpr explicit variant_base(std::in_place_index_t<Index>, Args&&... args) /*noexcept*/
+      : storage_(std::in_place_index<Index>, std::forward<Args>(args)...), which_(Index) {}
+
+private:
+  // To avoid unnecessary recursive instantiation of `variant_storage`, which can be expensive for compile times.
+  struct empty_t {};
+  // FIXME: Exclude `void` types.
+  using storage_t = variant_storage<(std::is_trivially_destructible_v<typename Alts::type> && ...), 0, Alts...>;
+
+  NO_UNIQUE_ADDRESS std::conditional_t<has_storage, storage_t, empty_t> storage_;
+  std::size_t which_;
+
+  friend struct access::base;
+};
 
 } // namespace variant_detail
 
@@ -370,6 +307,20 @@ template <typename Alt>
 concept specialization_of_alt = variant_detail::is_specialization_of_alt<Alt>;
 
 
+namespace variant_detail {
+
+template <typename... AllTypes>
+struct select_smf_ {
+  template <typename... NonVoidTypes>
+  using type = detail::smf_selection::select_smf<variant_base<AllTypes...>, NonVoidTypes...>;
+};
+
+template <typename... Alts>
+using select_smf = meta::apply_t<select_smf_<Alts...>::template type, non_void_types<typename Alts::type...>>;
+
+} // namespace variant_detail
+
+
 template <specialization_of_alt... Alts>
 class variant : private
                 // FIXME: Use "Conditionally Trivial Special Member Functions" when `__cpp_concepts >= 202002L`.
@@ -386,7 +337,7 @@ class variant : private
   static_assert(meta::all_v<meta::map_t<std::is_destructible, non_void_types>>,
                 "variant alternatives must be destructible");
 
-  using base = variant_detail::select_smf<Alts...>;
+  using base_t = variant_detail::select_smf<Alts...>;
 
 public:
   template <meta::fstr Tag, typename... Args, std::size_t Index = variant_detail::alt_index<Tag, Alts...>,
@@ -397,9 +348,17 @@ public:
               (!std::is_void_v<Type> && std::is_constructible_v<Type, Args...>))
   constexpr /*explicit*/ variant(tag_t<Tag>, Args&&... args) noexcept(std::is_void_v<Type> ||
                                                                       std::is_nothrow_constructible_v<Type, Args...>)
-      : base(std::in_place_index<Index>, std::forward<Args>(args)...) {}
+      : base_t(std::in_place_index<Index>, std::forward<Args>(args)...) {}
 
   // TODO: Add overload for `std::initializer_list`.
+
+private:
+  friend struct variant_detail::access::variant;
+
+  constexpr auto&& base() & noexcept { return static_cast<base_t&>(*this); }
+  constexpr auto&& base() const& noexcept { return static_cast<base_t const&>(*this); }
+  constexpr auto&& base() && noexcept { return static_cast<base_t&&>(*this); }
+  constexpr auto&& base() const&& noexcept { return static_cast<base_t const&&>(*this); }
 };
 
 

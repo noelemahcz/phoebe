@@ -1,6 +1,7 @@
 #include "../include/phoebe/variant/variant.hpp"
 
 #include <string>
+#include <variant>
 
 
 using namespace phoebe;
@@ -33,5 +34,4 @@ inline constexpr my_variant3 var3_1 = {"empty1"_t};
 inline constexpr my_variant3 var3_2 = {"empty2"_t};
 
 
-int main() {
-}
+// int main() {}
