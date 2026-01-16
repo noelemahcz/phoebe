@@ -8,8 +8,8 @@ using namespace phoebe;
 
 
 using my_variant = variant<alt<"empty">, alt<"foo", int>, alt<"bar", std::pair<bool, double>>>;
-static_assert(!std::is_trivially_move_constructible_v<my_variant>);
-static_assert(!std::is_trivially_copy_constructible_v<my_variant>);
+static_assert(std::is_trivially_move_constructible_v<my_variant>);
+static_assert(std::is_trivially_copy_constructible_v<my_variant>);
 static_assert(!std::is_trivially_move_assignable_v<my_variant>);
 static_assert(!std::is_trivially_copy_assignable_v<my_variant>);
 static_assert(std::is_trivially_move_constructible_v<std::pair<bool, double>>);
@@ -18,6 +18,7 @@ static_assert(!std::is_trivially_move_assignable_v<std::pair<bool, int>>);
 static_assert(!std::is_trivially_copy_assignable_v<std::pair<bool, int>>);
 
 using my_variant2 = variant<alt<"empty">, alt<"str", std::string>>;
+static_assert(!std::is_trivially_destructible_v<my_variant2>);
 
 using my_variant3 = variant<alt<"empty1">, alt<"empty2">>;
 

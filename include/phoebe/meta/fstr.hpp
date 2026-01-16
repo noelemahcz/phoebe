@@ -22,8 +22,8 @@ struct fstr {
   }
 
   template <std::size_t M>
-  consteval auto operator==(this auto const& lhs, fstr<M> const& rhs) /*noexcept*/ -> bool {
-    return lhs <=> rhs == 0;
+  consteval auto operator==(fstr<M> const& rhs) const /*noexcept*/ -> bool {
+    return *this <=> rhs == 0;
   }
 
   consteval /*explicit*/ operator std::string_view() const /*noexcept*/ { return std::string_view{str_, N - 1}; }

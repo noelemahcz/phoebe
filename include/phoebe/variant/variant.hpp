@@ -6,7 +6,6 @@
 #include "../meta/fstr.hpp"
 #include "../meta/list.hpp"
 #include "../meta/pack.hpp"
-#include "meta.hpp" // FIXME: Remove this header.
 #include "smf_selection.hpp"
 
 #include <cstddef>
@@ -19,29 +18,62 @@
 namespace phoebe {
 
 
-template <meta::fstr Tag, typename Type = void>
-struct alt {
-  static constexpr auto tag = Tag;
-  using type = Type;
-};
-
-
-template <meta::fstr Tag>
-struct tag_t {};
-
-template <meta::fstr Tag>
-inline constexpr tag_t<Tag> tag{};
-
-namespace variant_literals {
-template <meta::fstr Tag>
-consteval auto operator""_t() -> tag_t<Tag> {
-  return tag<Tag>;
-}
-} // namespace variant_literals
-
 // NOTE: `tag_t` should imply in-place semantics.
 // template <meta::fstr Tag> struct in_place_tag_t {};
 // template <meta::fstr Tag> inline constexpr in_place_tag_t<Tag> in_place_tag{};
+
+template <meta::fstr Tag> struct tag_t {};                    // clang-format ignore
+template <meta::fstr Tag> inline constexpr tag_t<Tag> tag{};  // clang-format ignore
+
+namespace variant_literals {
+template <meta::fstr Tag>
+consteval auto operator""_t() noexcept -> tag_t<Tag> { return {}; } // clang-format ignore
+} // namespace variant_literals
+
+
+// Stateless flag, also used for space optimization.
+struct none_t {};
+inline constexpr none_t none{};
+
+
+template <meta::fstr Tag, typename Type = none_t>
+struct alt {
+  // FIXME: Check if the type is complete?
+  static_assert(!std::is_array_v<Type>, "array types cannot be used as an alternative");
+  static_assert(!std::is_reference_v<Type>, "reference types cannot be used as an alternative");
+  static_assert(std::is_destructible_v<Type>, "types used as an alternative must be destructible");
+
+  static constexpr meta::fstr tag = Tag;
+  using type = Type;
+};
+
+// Treat `void` as `none_t`.
+template <meta::fstr Tag>
+struct alt<Tag, void> {
+  static constexpr meta::fstr tag = Tag;
+  using type = none_t;
+};
+
+// FIXME: Support for `std::monostate` after C++26.
+// // Treat `std::monostate` as `none_t`.
+// template <meta::fstr Tag>
+// struct alt<Tag, std::monostate> {
+//   static constexpr meta::fstr tag = Tag;
+//   using type = none_t;
+// };
+
+template <typename Alt>
+inline constexpr bool is_stateless_alt = std::is_same_v<typename Alt::type, none_t>;
+
+
+template <typename T>
+inline constexpr bool is_specialization_of_alt = false;
+
+template <meta::fstr Tag, typename T>
+inline constexpr bool is_specialization_of_alt<alt<Tag, T>> = true;
+
+template <typename Alt>
+concept specialization_of_alt = is_specialization_of_alt<Alt>;
 
 
 namespace variant_detail {
@@ -49,7 +81,7 @@ namespace variant_detail {
 inline constexpr auto npos = static_cast<std::size_t>(-1);
 
 template <meta::fstr Tag, typename... Alts>
-consteval auto alt_index_impl() /*noexcept*/ -> std::size_t {
+consteval auto find_alt_by_tag() /*noexcept*/ -> std::size_t {
   constexpr bool matches[] = {Alts::tag == Tag...};
   for (std::size_t i = 0; i < sizeof...(Alts); ++i) {
     if (matches[i]) {
@@ -59,62 +91,46 @@ consteval auto alt_index_impl() /*noexcept*/ -> std::size_t {
   return npos;
 }
 
-template <meta::fstr Tag, typename... Alts>
-inline constexpr std::size_t alt_index = alt_index_impl<Tag, Alts...>();
-
-template <meta::fstr Tag, typename... Alts>
-inline constexpr bool tag_in_alts = alt_index<Tag, Alts...> != npos;
-
 template <std::size_t Index, typename... Alts>
-using alt_type = meta::pack::strict::at_t<Index, typename Alts::type...>;
+using alt_pack_at = meta::pack::strict::at_t<Index, Alts...>;
 
-} // namespace variant_detail
-
-
-namespace variant_detail {
-
-template <typename Type>
-using is_not_void = std::negation<std::is_void<Type>>;
-
-template <typename... Types>
-using non_void_types =
-    // meta::filter_t<meta::compose<std::negation, std::is_void>::type, meta::list<Types...>>;
-    meta::filter_t<is_not_void, meta::list<Types...>>;
+template <std::size_t Index, typename Alts>
+using alt_list_at = meta::list::strict::at_t<Index, Alts>;
 
 } // namespace variant_detail
 
 
 namespace variant_detail::access {
 
-struct none_t {};
-
-inline constexpr none_t none{};
-
 struct storage {
-  template <typename VariantStorage>
-  static constexpr auto&& get_alt(std::in_place_index_t<0>, VariantStorage&& storage) /*noexcept*/ {
-    return std::forward<VariantStorage>(storage).head_;
-  }
-
   // WARNING: No bounds checking.
   template <std::size_t Index, typename VariantStorage>
   static constexpr auto&& get_alt(std::in_place_index_t<Index>, VariantStorage&& storage) /*noexcept*/ {
-    return get_alt(std::in_place_index<Index - 1>, std::forward<VariantStorage>(storage).tail_);
+    if constexpr (Index == 0) {
+      return std::forward<VariantStorage>(storage).head_;
+    } else {
+      return get_alt(std::in_place_index<Index - 1>, std::forward<VariantStorage>(storage).tail_);
+    }
   }
 };
 
 struct base {
+  // WARNING: No bounds checking.
   template <std::size_t Index, typename VariantBase, typename UnCVRefBase = std::remove_cvref_t<VariantBase>>
-    requires UnCVRefBase::has_storage && (Index < UnCVRefBase::size) // FIXME: Is these checks necessary here?
-  static constexpr decltype(auto) get_alt(VariantBase&& base) /*noexcept*/ {
-    return storage::get_alt(std::in_place_index<Index>, std::forward<VariantBase>(base).storage_);
+  static constexpr auto&& get_alt(VariantBase&& base) /*noexcept*/ {
+    // For the case where all alternatives are stateless, directly return `storage_` (which is `none_t`).
+    if constexpr (UnCVRefBase::has_optimized_storage) {
+      return std::forward<VariantBase>(base).storage_;
+    } else {
+      return storage::get_alt(std::in_place_index<Index>, std::forward<VariantBase>(base).storage_);
+    }
   }
 };
 
 struct variant {
+  // WARNING: No bounds checking.
   template <std::size_t Index, typename Variant>
-  // TODO: Constraints.
-  static constexpr decltype(auto) get_alt(Variant&& var) /*noexcept*/ {
+  static constexpr auto&& get_alt(Variant&& var) /*noexcept*/ {
     return base::get_alt<Index>(std::forward<Variant>(var).base());
   }
 };
@@ -132,12 +148,12 @@ struct dispatcher {
       // FIXME: Is `static_cast` necessary?
       auto&& base = meta::pack::strict::value::at<base_index>(static_cast<VariantBases>(bases)...);
 
-      using alt_t = meta::list2::at_t<active_index, typename std::remove_cvref_t<decltype(base)>::alts>;
+      using alt = alt_list_at<active_index, typename std::remove_cvref_t<decltype(base)>::alts>;
 
       if constexpr (ArgIndex % 2 == 0) /* tag */ {
-        return tag<alt_t::tag>;
+        return tag<alt::tag>;
 
-      } else if (std::is_void_v<typename alt_t::type>) /* void */ {
+      } else if (std::is_void_v<typename alt::type>) /* void */ {
         return none;
 
       } else /* value */ {
@@ -213,21 +229,22 @@ struct variant_alt {
   type value;
 };
 
-template <std::size_t Index, meta::fstr Tag>
-struct variant_alt<Index, alt<Tag>> {
+// WORKAROUND: MSVC requires a non-empty member to correctly determine the active
+// union member during constant evaluation (and even in non-constant evaluation?).
+#ifdef PHOEBE_IS_MSVC
+template <std::size_t Index, typename Alt>
+  requires std::is_empty_v<typename Alt::type>
+struct variant_alt<Index, Alt> {
   static constexpr std::size_t index = Index;
-  static constexpr meta::fstr tag = Tag;
-  using type = void;
+  static constexpr meta::fstr tag = Alt::tag;
+  using type = Alt::type;
 
   constexpr explicit variant_alt(std::in_place_t) noexcept {}
 
-  // FIXME: Move to `config.h`.
-  // WORKAROUND: MSVC requires a non-empty member to correctly
-  // determine the active union member during constant evaluation.
-#if defined(_MSC_VER) && !defined(__clang__)
+  NO_UNIQUE_ADDRESS none_t value;
   char dummy = 0;
-#endif
 };
+#endif
 
 template <bool TriviallyDestructible, std::size_t Index, typename... Alts>
 union variant_storage {};
@@ -263,14 +280,14 @@ class variant_base {
 public:
   // FIXME: CPS version.
   // template <template <typename...> typename F> using alts_with = F<Alts...>;
-  using alts = meta::list<Alts...>;
+  using alts = meta::list::list<Alts...>;
   static constexpr std::size_t size = sizeof...(Alts);
 
-  static constexpr bool has_storage = !(std::is_void_v<typename Alts::type> && ...);
+  static constexpr bool has_optimized_storage = (is_stateless_alt<Alts> && ...);
 
 protected:
   template <std::size_t Index, typename... Args>
-    requires (!has_storage)
+    requires has_optimized_storage
   constexpr explicit variant_base(std::in_place_index_t<Index>) /*noexcept*/
       : which_(Index) {}
 
@@ -279,44 +296,20 @@ protected:
       : storage_(std::in_place_index<Index>, std::forward<Args>(args)...), which_(Index) {}
 
 private:
-  // To avoid unnecessary recursive instantiation of `variant_storage`, which can be expensive for compile times.
-  struct empty_t {};
-  // FIXME: Exclude `void` types.
-  using storage_t = variant_storage<(std::is_trivially_destructible_v<typename Alts::type> && ...), 0, Alts...>;
+  using variant_storage_t = variant_storage<(std::is_trivially_destructible_v<typename Alts::type> && ...), 0, Alts...>;
 
-  NO_UNIQUE_ADDRESS std::conditional_t<has_storage, storage_t, empty_t> storage_;
+  // When all alternatives are stateless, avoid unnecessary recursive template instantiations to improve compile times.
+  // With the current `get` implementation, this also avoids unnecessary recursive runtime lookups.
+  using storage_t = std::conditional_t<has_optimized_storage, none_t, variant_storage_t>;
+
+  NO_UNIQUE_ADDRESS storage_t storage_;
   std::size_t which_;
 
   friend struct access::base;
 };
 
-} // namespace variant_detail
-
-
-namespace variant_detail {
-
-template <typename T>
-inline constexpr bool is_specialization_of_alt = false;
-
-template <meta::fstr Tag, typename T>
-inline constexpr bool is_specialization_of_alt<alt<Tag, T>> = true;
-
-} // namespace variant_detail
-
-template <typename Alt>
-concept specialization_of_alt = variant_detail::is_specialization_of_alt<Alt>;
-
-
-namespace variant_detail {
-
-template <typename... AllTypes>
-struct select_smf_ {
-  template <typename... NonVoidTypes>
-  using type = detail::smf_selection::select_smf<variant_base<AllTypes...>, NonVoidTypes...>;
-};
-
 template <typename... Alts>
-using select_smf = meta::apply_t<select_smf_<Alts...>::template type, non_void_types<typename Alts::type...>>;
+using select_smf = detail::smf_selection::select_smf<variant_base<Alts...>, typename Alts::type...>;
 
 } // namespace variant_detail
 
@@ -329,36 +322,30 @@ class variant : private
   static_assert(sizeof...(Alts) > 0, "variant must consist of at least one alternative.");
   static_assert(meta::has_no_duplicate_strs_v<Alts::tag...>, "variant can not have duplicate tags.");
 
-  using non_void_types = variant_detail::non_void_types<typename Alts::type...>;
-  static_assert(!meta::any_v<meta::map_t<std::is_array, non_void_types>>,
-                "variant can not have an array type as an alternative.");
-  static_assert(!meta::any_v<meta::map_t<std::is_reference, non_void_types>>,
-                "variant can not have a reference type as an alternative.");
-  static_assert(meta::all_v<meta::map_t<std::is_destructible, non_void_types>>,
-                "variant alternatives must be destructible");
-
   using base_t = variant_detail::select_smf<Alts...>;
 
 public:
-  template <meta::fstr Tag, typename... Args, std::size_t Index = variant_detail::alt_index<Tag, Alts...>,
-            typename Type = variant_detail::alt_type<Index, Alts...>>
-    requires (Index !=
-              variant_detail::npos) && // FIXME: Might be redundant because `alt_type` is already SFINAE friendly.
-             ((std::is_void_v<Type> && sizeof...(Args) == 0) ||
-              (!std::is_void_v<Type> && std::is_constructible_v<Type, Args...>))
-  constexpr /*explicit*/ variant(tag_t<Tag>, Args&&... args) noexcept(std::is_void_v<Type> ||
-                                                                      std::is_nothrow_constructible_v<Type, Args...>)
-      : base_t(std::in_place_index<Index>, std::forward<Args>(args)...) {}
+  template <meta::fstr Tag, typename... Args, std::size_t AltIndex = variant_detail::find_alt_by_tag<Tag, Alts...>(),
+            typename Alt = variant_detail::alt_pack_at<AltIndex, Alts...>>
+    requires (AltIndex != variant_detail::npos) && // FIXME:
+                                                   // Might be redundant because `alt_pack_at` is already SFINAE
+                                                   // friendly. The template parameter `Alt` is evaluated before this
+                                                   // constraint, leading to unfriendly error messages.
+             ((is_stateless_alt<Alt> && sizeof...(Args) == 0) ||
+              (!is_stateless_alt<Alt> && std::is_constructible_v<typename Alt::type, Args...>))
+  constexpr /*explicit*/ variant(tag_t<Tag>, Args&&... args) // clang-format ignore
+      noexcept(is_stateless_alt<Alt> || std::is_nothrow_constructible_v<typename Alt::type, Args...>)
+      : base_t(std::in_place_index<AltIndex>, std::forward<Args>(args)...) {}
 
   // TODO: Add overload for `std::initializer_list`.
 
 private:
-  friend struct variant_detail::access::variant;
-
   constexpr auto&& base() & noexcept { return static_cast<base_t&>(*this); }
   constexpr auto&& base() const& noexcept { return static_cast<base_t const&>(*this); }
   constexpr auto&& base() && noexcept { return static_cast<base_t&&>(*this); }
   constexpr auto&& base() const&& noexcept { return static_cast<base_t const&&>(*this); }
+
+  friend struct variant_detail::access::variant;
 };
 
 

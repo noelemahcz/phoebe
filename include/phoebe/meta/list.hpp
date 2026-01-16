@@ -8,7 +8,7 @@
 #include <type_traits>
 
 
-namespace meta::list2 {
+namespace meta::list {
 
 
 template <typename... Ts>
