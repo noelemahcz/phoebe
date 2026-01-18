@@ -1,8 +1,7 @@
 #pragma once
 
 
-#include "../../list.hpp"
-
+#include "../../../config.h"
 
 #include <cstddef>
 
@@ -16,7 +15,7 @@ namespace meta::pack {
 inline namespace lazy {
 namespace detail {
 
-#ifdef __clang__
+#if defined(PHOEBE_IS_CLANG) || defined(PHOEBE_IS_CLANG_CL)
 
 template <std::size_t I, typename... Ts>
 struct at {};
@@ -27,7 +26,7 @@ struct at<I, Ts...> {
   using type = __type_pack_element<I, Ts...>;
 };
 
-#elif defined(__GNUC__) || defined(__GNUG__)
+#elif defined(PHOEBE_IS_GCC)
 
 // NOTE:
 // GCC's `__type_pack_element` cannot be used in a "requires expression",
@@ -176,7 +175,7 @@ struct any_type {
 template <typename... Dummies>
 struct matcher_impl {
   template <typename T, typename... Tail>
-  static consteval decltype(auto) match(Dummies..., T&& value, Tail&&...) noexcept {
+  static CONSTEVAL auto&& match(Dummies..., T&& value, Tail&&...) noexcept {
     return std::forward<T>(value);
   }
 };
@@ -197,14 +196,18 @@ struct at {
 } // namespace strict::detail
 
 
-namespace strict::value::detail {
+namespace value::strict::detail {
 
+// NOTE:
+// This function relies on P2280 ("Using unknown pointers and references in constant expressions").
+// Even when called with arguments referring to runtime values, these "unknown references" are valid
+// in a constant expression provided no lvalue-to-rvalue conversion (value reading) occurs.
 template <std::size_t I, typename... Ts>
-consteval decltype(auto) at(Ts&&... values) noexcept {
+CONSTEVAL auto&& at(Ts&&... values) noexcept {
   return matcher<I>::match(std::forward<Ts>(values)...);
 }
 
-} // namespace strict::value::detail
+} // namespace value::strict::detail
 
 
 } // namespace meta::pack

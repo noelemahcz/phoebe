@@ -3,10 +3,17 @@
 #include <type_traits>
 
 
+template <typename... Ts>
+struct overloads : Ts... {
+  using Ts::operator()...;
+};
+
+
 namespace access = phoebe::variant_detail::access;
 
 using namespace phoebe::variant_literals;
 
+using phoebe::tag_t;
 using phoebe::none_t;
 using phoebe::alt;
 using phoebe::variant;
@@ -32,15 +39,29 @@ static constexpr nbi_var nbi_n{"empty"_t};
 static constexpr nbi_var nbi_b{"bool"_t, true};
 static constexpr nbi_var nbi_i{"int"_t, 42};
 
-static_assert(std::is_same_v<decltype((access::variant::get_alt<0>(nbi_n).value)), none_t const&>);
-static_assert(access::variant::get_alt<1>(nbi_b).value == true);
-static_assert(access::variant::get_alt<2>(nbi_i).value == 42);
+static_assert(std::is_same_v<decltype((access::variant::get_variant_alt<0>(nbi_n))),
+                             access::variant_alt_value_ref<0, "empty", none_t const&>>);
+static_assert(std::is_same_v<decltype((access::variant::get_variant_alt<1>(nbi_b))),
+                             access::variant_alt_value_ref<1, "bool", bool const&>>);
+static_assert(std::is_same_v<decltype((access::variant::get_variant_alt<2>(nbi_i))),
+                             access::variant_alt_value_ref<2, "int", int const&>>);
+
+static_assert(access::variant::get_variant_alt<1>(nbi_b).ref == true);
+static_assert(access::variant::get_variant_alt<2>(nbi_i).ref == 42);
 
 // Fails to compile on MSVC without a workaround in `variant_alt`.
-static constexpr auto val = access::variant::get_alt<0>(nbi_n);
+static constexpr auto val = access::variant::get_variant_alt<0>(nbi_n);
 
 // Reference forms always compile, no workaround needed.
-static constexpr auto&& ref = access::variant::get_alt<0>(nbi_n);
+static constexpr auto&& ref = access::variant::get_variant_alt<0>(nbi_n);
+
+// static constexpr auto nbi_visitor = [](auto&&...) -> bool { return true; };
+static constexpr auto nbi_visitor = overloads{
+    [](tag_t<"empty">, access::variant_alt_value_ref<0, "empty", none_t const&>) -> bool { return false; },
+    [](tag_t<"bool">, access::variant_alt_value_ref<1, "bool", bool const&>) -> bool { return true; },
+    [](tag_t<"int">, access::variant_alt_value_ref<2, "int", int const&>) -> bool { return false; },
+};
+static_assert(access::variant::visit_variant_alt(nbi_visitor, nbi_b));
 
 
 template <template <typename...> typename F>
@@ -58,31 +79,29 @@ static constexpr nnn_var nnn_n1{"empty1"_t};
 static constexpr nnn_var nnn_n2{"empty2"_t};
 static constexpr nnn_var nnn_n3{"empty3"_t};
 
-static_assert(std::is_same_v<decltype(access::variant::get_alt<0>(nnn_n1)), none_t const&>);
-static_assert(std::is_same_v<decltype(access::variant::get_alt<0>(nnn_n2)), none_t const&>);
-static_assert(std::is_same_v<decltype(access::variant::get_alt<0>(nnn_n3)), none_t const&>);
-
-
-// TODO: Support storage optimization for user-defined empty types.
-struct empty_a {};
-struct empty_b {};
-struct empty_c {};
-
-template <template <typename...> typename F>
-using abc_alts = F<alt<"a", empty_a>, alt<"b", empty_b>, alt<"c", empty_c>>;
-
-using abc_var = abc_alts<variant>;
-// static_assert(sizeof(abc_var) == 8);
-static_assert(std::is_trivially_destructible_v<abc_var>);
-
-using abc_base = abc_alts<variant_base>;
-// static_assert(sizeof(abc_base) == 8);
-// static_assert(abc_base::has_optimized_storage);
+static_assert(std::is_same_v<decltype(access::variant::get_variant_alt<0>(nnn_n1)),
+                             access::variant_alt_value_ref<0, "empty1", none_t const&>>);
+static_assert(std::is_same_v<decltype(access::variant::get_variant_alt<1>(nnn_n2)),
+                             access::variant_alt_value_ref<1, "empty2", none_t const&>>);
+static_assert(std::is_same_v<decltype(access::variant::get_variant_alt<2>(nnn_n3)),
+                             access::variant_alt_value_ref<2, "empty3", none_t const&>>);
 
 
 #include <iostream>
 
 int main() {
+  nbi_var r_nbi_n{"empty"_t};
+  nbi_var r_nbi_b{"bool"_t, true};
+  nbi_var r_nbi_i{"int"_t, 42};
+
+  auto r_nbi_visitor = overloads{
+      [](tag_t<"empty">, access::variant_alt_value_ref<0, "empty", none_t&>) -> bool { return false; },
+      [](tag_t<"bool">, access::variant_alt_value_ref<1, "bool", bool&>) -> bool { return true; },
+      [](tag_t<"int">, access::variant_alt_value_ref<2, "int", int&>) -> bool { return false; },
+  };
+
+  access::variant::visit_variant_alt(r_nbi_visitor, r_nbi_b);
+
   // auto x = phoebe::variant_detail::access::variant::get_alt<0>(nbi_n);
   // std::cout << &x << std::endl;
 }

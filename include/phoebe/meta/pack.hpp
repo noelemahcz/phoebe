@@ -31,13 +31,14 @@ using at = detail::at<I, Ts...>;
 template <std::size_t I, typename... Ts>
 using at_t = at<I, Ts...>::type;
 
-namespace value {
+} // namespace strict
+
+
+namespace value::strict {
 
 using detail::at;
 
 }
-
-} // namespace strict
 
 
 template <typename T>
