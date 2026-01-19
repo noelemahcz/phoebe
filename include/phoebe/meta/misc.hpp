@@ -1,7 +1,27 @@
 #pragma once
 
 
+#include <type_traits>
+
+
 namespace meta {
+
+
+template <typename T, typename U>
+struct forward_cvref {
+private:
+  using unref_t = std::remove_reference_t<T>;
+  using unref_u = std::remove_reference_t<U>;
+
+  using const_u = std::conditional_t<std::is_const_v<unref_t>, unref_u const, unref_u>;
+  using cv_u = std::conditional_t<std::is_volatile_v<unref_t>, const_u volatile, const_u>;
+
+public:
+  using type = std::conditional_t<std::is_lvalue_reference_v<T>, cv_u&, cv_u&&>;
+};
+
+template <typename T, typename U>
+using forward_cvref_t = forward_cvref<T, U>::type;
 
 
 template <template <typename...> typename F, typename... BoundArgs>

@@ -13,20 +13,21 @@ namespace meta {
 
 template <std::size_t N>
 struct fstr {
-  char str_[N]{};
-  consteval /*explicit*/ fstr(char const (&str)[N]) /*noexcept*/ { std::copy_n(str, N, str_); }
+  char buf[N]{};
+
+  consteval /*explicit*/ fstr(char const (&str)[N]) noexcept { std::copy_n(str, N, buf); }
+
+  consteval /*explicit*/ operator std::string_view() const noexcept { return std::string_view{buf, N - 1}; }
 
   template <std::size_t M>
-  consteval auto operator<=>(fstr<M> const& rhs) const /*noexcept*/ {
+  consteval auto operator<=>(fstr<M> const& rhs) const noexcept {
     return operator std::string_view() <=> rhs;
   }
 
   template <std::size_t M>
-  consteval auto operator==(fstr<M> const& rhs) const /*noexcept*/ -> bool {
+  consteval auto operator==(fstr<M> const& rhs) const noexcept -> bool {
     return *this <=> rhs == 0;
   }
-
-  consteval /*explicit*/ operator std::string_view() const /*noexcept*/ { return std::string_view{str_, N - 1}; }
 };
 
 

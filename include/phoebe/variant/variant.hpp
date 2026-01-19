@@ -5,6 +5,7 @@
 
 #include "../meta/fstr.hpp"
 #include "../meta/list.hpp"
+#include "../meta/misc.hpp"
 #include "../meta/pack.hpp"
 #include "smf_selection.hpp"
 
@@ -23,7 +24,17 @@ namespace phoebe {
 // template <meta::fstr Tag> struct in_place_tag_t {};
 // template <meta::fstr Tag> inline constexpr in_place_tag_t<Tag> in_place_tag{};
 
-template <meta::fstr Tag> struct tag_t {};                    // clang-format ignore
+template <meta::fstr Tag>
+struct tag_t {
+  template <meta::fstr RHSTag>
+  // clang-format ignore
+  consteval auto operator<=>(tag_t<RHSTag> const&) const noexcept { return Tag <=> RHSTag; }
+
+  template <meta::fstr RHSTag>
+  // clang-format ignore
+  consteval auto operator==(tag_t<RHSTag> const&) const noexcept -> bool { return Tag == RHSTag; }
+};
+
 template <meta::fstr Tag> inline constexpr tag_t<Tag> tag{};  // clang-format ignore
 
 namespace variant_literals {
@@ -101,16 +112,31 @@ using alt_list_at = meta::list::strict::at_t<Index, Alts>;
 } // namespace variant_detail
 
 
+// Forward declarations.
+namespace variant_detail {
+template <std::size_t Index, meta::fstr Tag, typename Type>
+struct variant_alt_value;
+}
+
+
 namespace variant_detail::access {
 
-template <std::size_t Index, meta::fstr Tag, typename CVRefType>
-struct variant_alt_value_ref {
+template <std::size_t Index, meta::fstr Tag, typename Type>
+struct variant_alt_ref {
   static constexpr std::size_t index = Index;
   static constexpr meta::fstr tag = Tag;
-  using type = std::remove_cvref_t<CVRefType>;
-  using cvref_type = CVRefType;
-  cvref_type ref;
+  using type = Type;
+  type ref;
 };
+
+template <typename VariantAltValue>
+constexpr auto variant_alt_ref_from_value(VariantAltValue&& variant_alt_value) noexcept {
+  using uncvref_t = std::remove_cvref_t<VariantAltValue>;
+  constexpr std::size_t index = uncvref_t::index;
+  constexpr meta::fstr tag = uncvref_t::tag;
+  using type = meta::forward_cvref_t<VariantAltValue, typename uncvref_t::type>;
+  return variant_alt_ref<index, tag, type>{std::forward<VariantAltValue>(variant_alt_value).value};
+}
 
 struct storage {
   // WARNING: No bounds checking.
@@ -132,14 +158,11 @@ struct base {
     if constexpr (UnCVRefBase::has_optimized_storage) {
       using alt_t = alt_list_at<Index, typename UnCVRefBase::alts>;
       auto&& value = std::forward_like<VariantBase>(base.storage_);
-      return variant_alt_value_ref<Index, alt_t::tag, decltype(value)>{value};
+      return variant_alt_ref<Index, alt_t::tag, decltype(value)>{value};
 
     } else {
-      auto&& variant_alt =
-          storage::get_variant_alt(std::in_place_index<Index>, std::forward<VariantBase>(base).storage_);
-      auto&& value = std::forward_like<decltype(variant_alt)>(variant_alt.value);
-      using uncvref_variant_alt_t = std::remove_cvref_t<decltype(variant_alt)>;
-      return variant_alt_value_ref<uncvref_variant_alt_t::index, uncvref_variant_alt_t::tag, decltype(value)>{value};
+      return variant_alt_ref_from_value(
+          storage::get_variant_alt(std::in_place_index<Index>, std::forward<VariantBase>(base).storage_));
     }
   }
 
@@ -159,6 +182,16 @@ private:
     }
   }
 
+  template <std::size_t... Is>
+  struct dispatcher {
+    // FIXME: Boundary check?
+    template <typename Visitor, typename... VariantBases>
+    static constexpr decltype(auto) dispatch(Visitor visitor, VariantBases... bases) /*noexcept*/ {
+      // No deduction happens above, so use `static_cast` instead of `std::forward`.
+      return std::invoke(static_cast<Visitor>(visitor), get_variant_alt<Is>(static_cast<VariantBases>(bases))...);
+    }
+  };
+
   template <typename Visitor, typename... VariantBases, std::size_t... Is>
   static consteval auto make_dispatch_table_impl(std::index_sequence<Is...>) noexcept {
     return &dispatcher<Is...>::template dispatch<Visitor, VariantBases...>;
@@ -175,69 +208,81 @@ private:
     return make_dispatch_table_impl<Visitor, VariantBases...>(
         std::index_sequence<>{}, std::make_index_sequence<std::remove_cvref_t<VariantBases>::size>{}...);
   }
-
-  template <std::size_t... ActiveIndices>
-  struct dispatcher {
-    template <typename Visitor, typename... VariantBases>
-    // FIXME: Boundary check
-    static constexpr decltype(auto) dispatch(Visitor visitor, VariantBases... bases) /*noexcept*/ {
-      // No deduction happens above, so use `static_cast` instead of `std::forward`.
-      return dispatch_impl<Visitor, VariantBases...>(std::make_index_sequence<2 * sizeof...(ActiveIndices)>{},
-                                                     static_cast<Visitor>(visitor),
-                                                     static_cast<VariantBases>(bases)...);
-    }
-
-    template <typename Visitor, typename... VariantBases, std::size_t... ArgIndices>
-    // FIXME: Boundary check
-    static constexpr decltype(auto) dispatch_impl(std::index_sequence<ArgIndices...>, Visitor visitor,
-                                                  VariantBases... bases) /*noexcept*/ {
-      auto const extract =
-          [&bases...]<std::size_t ArgIndex>(std::in_place_index_t<ArgIndex>) /*noexcept*/ -> decltype(auto) {
-        auto variant_alt_value_ref = meta::pack::value::strict::at<ArgIndex / 2>(
-            get_variant_alt<ActiveIndices>(static_cast<VariantBases>(bases))...);
-
-        if constexpr (ArgIndex % 2 == 0) /* tag */ {
-          return tag<decltype(variant_alt_value_ref)::tag>;
-
-        } else /* value */ {
-          return variant_alt_value_ref;
-        }
-      };
-
-      // No deduction happens above, so use `static_cast` instead of `std::forward`.
-      return std::invoke(static_cast<Visitor>(visitor), extract(std::in_place_index<ArgIndices>)...);
-    }
-  };
 };
+
 
 struct variant {
   // WARNING: No bounds checking.
   template <std::size_t Index, typename Variant>
-  static constexpr auto get_variant_alt(Variant&& var) /*noexcept*/ {
-    return base::get_variant_alt<Index>(std::forward<Variant>(var).base());
+  static constexpr auto get_variant_alt(Variant&& variant) /*noexcept*/ {
+    return base::get_variant_alt<Index>(std::forward<Variant>(variant).base());
   }
 
+  // FIXME: Boundary check?
   template <typename Visitor, typename... Variants>
-  static constexpr decltype(auto) visit_variant_alt(Visitor&& visitor, Variants&&... vars) /*noexcept*/ {
-    return base::visit_variant_alt(std::forward<Visitor>(visitor), std::forward<Variants>(vars).base()...);
+  static constexpr decltype(auto) visit_variant_alt(Visitor&& visitor, Variants&&... variants) /*noexcept*/ {
+    return base::visit_variant_alt(std::forward<Visitor>(visitor), std::forward<Variants>(variants).base()...);
   }
 };
+
+
+namespace visitors {
+
+template <typename VisitorRef>
+struct interleaved {
+  VisitorRef visitor_ref;
+
+  // FIXME: Boundary check?
+  template <typename... VariantAltRefs>
+  constexpr decltype(auto) operator()(VariantAltRefs&&... alt_refs) const /*noexcept*/ {
+    return impl(std::make_index_sequence<2 * sizeof...(VariantAltRefs)>{}, std::forward<VariantAltRefs>(alt_refs)...);
+  }
+
+private:
+  template <std::size_t... Is, typename... VariantAltRefs>
+  constexpr decltype(auto) impl(std::index_sequence<Is...>, VariantAltRefs&&... alt_refs) const /*noexcept*/ {
+    // Helper lambda to project the parameter pack into an interleaved sequence of (tag, value).
+    // The mechanism maps a linear index `I` (from 0 to 2N - 1) to the arguments:
+    // - `I / 2` selects the specific `variant_alt_ref` from the pack.
+    // - `I % 2 == 0` extracts the `tag` (even indices).
+    // - `I % 2 != 0` extracts the `value` reference (odd indices).
+    auto const tag_or_value = [this, &alt_refs...]<std::size_t I>() /*noexcept*/ -> decltype(auto) {
+      auto const alt_ref = meta::pack::value::strict::at<I / 2>(std::forward<VariantAltRefs>(alt_refs)...);
+      if constexpr (I % 2 == 0) /* tag */ { return tag<decltype(alt_ref)::tag>; }   // clang-format ignore
+      else /* value */ { return alt_ref.ref; }                                      // clang-format ignore
+    };
+
+    return std::invoke(static_cast<VisitorRef>(visitor_ref), tag_or_value.template operator()<Is>()...);
+  }
+};
+
+} // namespace visitors
 
 
 } // namespace variant_detail::access
 
 
+// FIXME: Boundary check?
+template <typename Visitor, typename... Variants>
+static constexpr decltype(auto) visit(Visitor&& visitor, Variants&&... variants) /*noexcept*/ {
+  return variant_detail::access::variant::visit_variant_alt(
+      variant_detail::access::visitors::interleaved{std::forward<Visitor>(visitor)},
+      std::forward<Variants>(variants)...);
+}
+
+
 namespace variant_detail {
 
-template <std::size_t Index, typename Alt>
-struct variant_alt {
+template <std::size_t Index, meta::fstr Tag, typename Type>
+struct variant_alt_value {
   static constexpr std::size_t index = Index;
-  static constexpr meta::fstr tag = Alt::tag;
-  using type = Alt::type;
+  static constexpr meta::fstr tag = Tag;
+  using type = Type;
 
   // Use `std::in_place_t` to disambiguate from copy/move constructors.
   template <typename... Args>
-  constexpr explicit variant_alt(std::in_place_t, Args&&... args) /*noexcept*/ : value(std::forward<Args>(args)...) {}
+  constexpr explicit variant_alt_value(std::in_place_t, Args&&... args) /*noexcept*/
+      : value(std::forward<Args>(args)...) {}
 
   type value;
 };
@@ -245,14 +290,14 @@ struct variant_alt {
 // WORKAROUND: MSVC requires a non-empty member to correctly determine the active
 // union member during constant evaluation (and even in non-constant evaluation?).
 #ifdef PHOEBE_IS_MSVC
-template <std::size_t Index, typename Alt>
-  requires std::is_empty_v<typename Alt::type>
-struct variant_alt<Index, Alt> {
+template <std::size_t Index, meta::fstr Tag, typename Type>
+  requires std::is_empty_v<Type>
+struct variant_alt_value<Index, Tag, Type> {
   static constexpr std::size_t index = Index;
-  static constexpr meta::fstr tag = Alt::tag;
-  using type = Alt::type;
+  static constexpr meta::fstr tag = Tag;
+  using type = Type;
 
-  constexpr explicit variant_alt(std::in_place_t) noexcept {}
+  constexpr explicit variant_alt_value(std::in_place_t) noexcept {}
 
   NO_UNIQUE_ADDRESS none_t value;
   char dummy = 0;
@@ -281,7 +326,7 @@ union variant_storage<TriviallyDestructible, Index, Alt, Tail...> {
   constexpr ~variant_storage() {}
 
 private:
-  /*NO_UNIQUE_ADDRESS*/ variant_alt<Index, Alt> head_;
+  /*NO_UNIQUE_ADDRESS*/ variant_alt_value<Index, Alt::tag, typename Alt::type> head_;
   variant_storage<TriviallyDestructible, Index + 1, Tail...> tail_;
 
   friend struct access::storage;
