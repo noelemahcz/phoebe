@@ -8,6 +8,7 @@ AlwaysBreakTemplateDeclarations: Yes
 ColumnLimit: 120
 ConstructorInitializerAllOnOneLineOrOnePerLine: true
 IndentWidth: 2
+LineEnding: LF
 MaxEmptyLinesToKeep: 2
 OneLineFormatOffRegex: '^// clang-format ignore$'
 PointerAlignment: Left

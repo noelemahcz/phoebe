@@ -26,7 +26,13 @@ struct fstr {
 
   template <std::size_t M>
   consteval auto operator==(fstr<M> const& rhs) const noexcept -> bool {
-    return *this <=> rhs == 0;
+    return operator std::string_view() == rhs;
+  }
+
+  consteval auto is_blank() const noexcept -> bool {
+    // Conforms to `std::isspace`.
+    // See: https://en.cppreference.com/w/cpp/string/byte/isspace
+    return operator std::string_view().find_first_not_of(" \f\n\r\t\v") == std::string_view::npos;
   }
 };
 

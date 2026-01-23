@@ -19,11 +19,17 @@ using phoebe::none_t;
 using phoebe::alt;
 using phoebe::variant;
 using phoebe::visit;
+using phoebe::match;
+using phoebe::case_;
+using phoebe::__;
 using phoebe::variant_detail::variant_alt_value;
 using phoebe::variant_detail::variant_base;
 using phoebe::variant_detail::variant_storage;
 
 static_assert(sizeof(variant_alt_value<0, "dummy", none_t>) == 1);
+
+// using wtf_var = variant<alt<"2">>;
+// static constexpr wtf_var ar{"3"_t};
 
 
 template <template <typename...> typename F>
@@ -96,13 +102,25 @@ static_assert(std::is_same_v<decltype(access::variant::get_variant_alt<2>(nnn_n3
 
 
 static constexpr auto nbi_nnn_visitor = [](auto tag1, auto&& value1, auto tag2, auto&& value2) {
-  return tag1 == "bool"_t && tag2 == "empty3"_t;
+  if constexpr (tag1 == "bool"_t && tag2 == "empty3"_t) {
+    // ...
+    return true;
+
+  } else if constexpr (tag1 == "int"_t && tag2 == "empty1"_t) {
+    // ...
+    return true;
+
+  } else {
+    // otherwise
+    return false;
+  }
 };
+
 static_assert(visit(nbi_nnn_visitor, nbi_b, nnn_n3));
-static_assert(!visit(nbi_nnn_visitor, nbi_b, nnn_n1));
+static_assert(visit(nbi_nnn_visitor, nbi_i, nnn_n1));
 
 
-#include <iostream>
+#include <print>
 
 int main() {
   nbi_var r_nbi_n{"empty"_t};
@@ -110,12 +128,103 @@ int main() {
   nbi_var r_nbi_i{"int"_t, 42};
 
   auto r_nbi_visitor = overloads{
-      [](access::variant_alt_ref<0, "empty", none_t&>) -> bool { return false; },
-      [](access::variant_alt_ref<1, "bool", bool&>) -> bool { return true; },
-      [](access::variant_alt_ref<2, "int", int&>) -> bool { return false; },
+      [](access::variant_alt_ref<0, "empty", none_t&>) { std::println("empty&"); },
+      [](access::variant_alt_ref<1, "bool", bool&>) { std::println("bool&"); },
+      [](access::variant_alt_ref<2, "int", int&>) { std::println("int&"); },
+      [](access::variant_alt_ref<0, "empty", none_t&&>) { std::println("empty&&"); },
+      [](access::variant_alt_ref<1, "bool", bool&&>) { std::println("bool&&"); },
+      [](access::variant_alt_ref<2, "int", int&&>) { std::println("int&&"); },
   };
-
+  access::variant::visit_variant_alt(r_nbi_visitor, r_nbi_n);
   access::variant::visit_variant_alt(r_nbi_visitor, r_nbi_b);
+  access::variant::visit_variant_alt(r_nbi_visitor, r_nbi_i);
+  access::variant::visit_variant_alt(r_nbi_visitor, nbi_var{"empty"_t});
+  access::variant::visit_variant_alt(r_nbi_visitor, nbi_var{"bool"_t, false});
+  access::variant::visit_variant_alt(r_nbi_visitor, nbi_var{"int"_t, 43});
+
+  auto r_nbi_visitor_2 = overloads{
+      [](tag_t<"empty">, auto&& value) { std::println("empty"); },
+      [](tag_t<"bool">, auto&& value) { std::println("bool"); },
+      [](tag_t<"int">, auto&& value) { std::println("int"); },
+  };
+  visit(r_nbi_visitor_2, r_nbi_n);
+  visit(r_nbi_visitor_2, r_nbi_b);
+  visit(r_nbi_visitor_2, r_nbi_i);
+  visit(r_nbi_visitor_2, nbi_var{"empty"_t});
+  visit(r_nbi_visitor_2, nbi_var{"bool"_t, false});
+  visit(r_nbi_visitor_2, nbi_var{"int"_t, 43});
+
+  // clang-format off
+  using var = variant<
+    alt<"empty">,
+    alt<"b", bool>,
+    alt<"i", int>,
+    alt<"d", double>
+  >;
+
+  var var_n{"empty"_t};
+  var var_b{"b"_t, true};
+  var const c_var_i{"i"_t, 42};
+
+  // match
+  match(var_n, var_b, c_var_i, var{"d"_t, 92.2})(
+      case_<"empty", "b", "i", "d">([](none_t&, bool& b, int const& i, double&& d) {
+        std::println("empty, b({}), i({}), d({})", b, i, d);
+      }),
+      case_<__, __, __, __>([](auto&&...) { std::println("wildcards"); })
+  );
+
+  // mismatch
+  match(var_n, var_b, c_var_i, var{"d"_t, 92.2})(
+      case_<"empty", "i", "i", "d">([](none_t&, int& i1, int const& i2, double&& d) {
+        std::println("empty, i1({}), i2({}), d({})", i1, i2, d);
+      }),
+      case_<__, __, __, __>([](auto&&...) { std::println("wildcards"); })
+  );
+
+  // match in order
+  match(var_n, var_b, c_var_i, var{"d"_t, 92.2})(
+      case_<__, __, __, __>([](auto&&...) { std::println("wildcards"); }),
+      case_<"empty", "b", "i", "d">([](none_t&, bool& b, int const& i, double&& d) {
+        std::println("empty, b({}), i({}), d({})", b, i, d);
+      })
+  );
+  // clang-format on
+
+  // match(nbi_var{"int"_t, 42})(case_<"int">([](auto&& value) { std::println("int"); }));
+
+  // std::srand(std::time(nullptr));
+  // bool coin_toss = (std::rand() % 2 == 0);
+  // nbi_var r_dynamic = coin_toss ? nbi_var{"empty"_t} : nbi_var{"bool"_t, true};
+  // visit(r_nbi_visitor_2, r_dynamic);
+  //
+  // auto r_nbi_visitor_3 = overloads{[](tag_t<"int">, auto&& value) { return value; }, [](auto&&...) { return 0; }};
+  // visit(r_nbi_visitor_3, r_nbi_b);
+
+  // auto r_nbi_nnn_visitor = [](auto tag1, auto&& value1, auto tag2, auto&& value2) {
+  //   if constexpr (std::is_same_v<decltype(tag1), tag_t<"bool">> && std::is_same_v<decltype(tag2), tag_t<"empty3">>) {
+  //     std::println("tag1 == bool({}), tag2 == empty3", value1);
+  //   }
+  //   // if constexpr (tag1 == "bool"_t && tag2 == "empty3"_t) {
+  //   //   std::println("tag1 == bool({}), tag2 == empty3", value1);
+  //   // } else if constexpr (tag1 == "int"_t && tag2 == "empty1"_t) {
+  //   //   std::println("tag1 == int({}), tag2 == empty1", value1);
+  //   // }
+  // };
+
+  // auto r_nbi_nnn_visitor = overloads{
+  //     [](tag_t<"empty">, auto&& value1, tag_t<"empty1">, auto&& value2) {},
+  //     [](tag_t<"empty">, auto&& value1, tag_t<"empty2">, auto&& value2) {},
+  //     [](tag_t<"empty">, auto&& value1, tag_t<"empty3">, auto&& value2) {},
+  //     [](tag_t<"bool">, auto&& value1, tag_t<"empty1">, auto&& value2) {},
+  //     [](tag_t<"bool">, auto&& value1, tag_t<"empty2">, auto&& value2) {},
+  //     [](tag_t<"bool">, auto&& value1, tag_t<"empty3">, auto&& value2) {},
+  //     [](tag_t<"int">, auto&& value1, tag_t<"empty1">, auto&& value2) {},
+  //     [](tag_t<"int">, auto&& value1, tag_t<"empty2">, auto&& value2) {},
+  //     [](tag_t<"int">, auto&& value1, tag_t<"empty3">, auto&& value2) {},
+  // };
+  // visit(r_nbi_nnn_visitor, r_nbi_b, nnn_n3);
+  // visit(r_nbi_nnn_visitor, r_nbi_i, nnn_n1);
 
   // auto x = phoebe::variant_detail::access::variant::get_alt<0>(nbi_n);
   // std::cout << &x << std::endl;

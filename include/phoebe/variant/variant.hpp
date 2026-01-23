@@ -50,6 +50,7 @@ inline constexpr none_t none{};
 
 template <meta::fstr Tag, typename Type = none_t>
 struct alt {
+  static_assert(!Tag.is_blank(), "tag cannot be empty or whitespace-only");
   // FIXME: Check if the type is complete?
   static_assert(!std::is_array_v<Type>, "array types cannot be used as an alternative");
   static_assert(!std::is_reference_v<Type>, "reference types cannot be used as an alternative");
@@ -81,8 +82,8 @@ inline constexpr bool is_stateless_alt = std::is_same_v<typename Alt::type, none
 template <typename T>
 inline constexpr bool is_specialization_of_alt = false;
 
-template <meta::fstr Tag, typename T>
-inline constexpr bool is_specialization_of_alt<alt<Tag, T>> = true;
+template <meta::fstr Tag, typename Type>
+inline constexpr bool is_specialization_of_alt<alt<Tag, Type>> = true;
 
 template <typename Alt>
 concept specialization_of_alt = is_specialization_of_alt<Alt>;
@@ -93,7 +94,7 @@ namespace variant_detail {
 inline constexpr auto npos = static_cast<std::size_t>(-1);
 
 template <meta::fstr Tag, typename... Alts>
-consteval auto find_alt_by_tag() /*noexcept*/ -> std::size_t {
+consteval auto alt_index_impl() noexcept -> std::size_t {
   constexpr bool matches[] = {Alts::tag == Tag...};
   for (std::size_t i = 0; i < sizeof...(Alts); ++i) {
     if (matches[i]) {
@@ -103,11 +104,31 @@ consteval auto find_alt_by_tag() /*noexcept*/ -> std::size_t {
   return npos;
 }
 
-template <std::size_t Index, typename... Alts>
-using alt_pack_at = meta::pack::strict::at_t<Index, Alts...>;
+template <meta::fstr Tag, typename... Alts>
+inline constexpr std::size_t alt_pack_index = alt_index_impl<Tag, Alts...>();
 
-template <std::size_t Index, typename Alts>
-using alt_list_at = meta::list::strict::at_t<Index, Alts>;
+template <meta::fstr Tag, typename AltList>
+struct alt_list_index_impl {};
+
+template <meta::fstr Tag, typename... Alts>
+struct alt_list_index_impl<Tag, meta::list::list<Alts...>> {
+  static constexpr std::size_t value = alt_index_impl<Tag, Alts...>();
+};
+
+template <meta::fstr Tag, typename AltList>
+inline constexpr std::size_t alt_list_index = alt_list_index_impl<Tag, AltList>::value;
+
+template <std::size_t Index, typename... Alts>
+struct alt_pack_at : meta::pack::strict::at<Index, Alts...> {};
+
+template <std::size_t Index, typename... Alts>
+using alt_pack_at_t = meta::pack::strict::at_t<Index, Alts...>;
+
+template <std::size_t Index, typename AltList>
+struct alt_list_at : meta::list::strict::at<Index, AltList> {};
+
+template <std::size_t Index, typename AltList>
+using alt_list_at_t = meta::list::strict::at_t<Index, AltList>;
 
 } // namespace variant_detail
 
@@ -152,11 +173,11 @@ struct storage {
 
 struct base {
   // WARNING: No bounds checking.
-  template <std::size_t Index, typename VariantBase, typename UnCVRefBase = std::remove_cvref_t<VariantBase>>
+  template <std::size_t Index, typename VariantBase>
   static constexpr auto get_variant_alt(VariantBase&& base) /*noexcept*/ {
     // For the case where all alternatives are stateless, directly return `storage_` (which is `none_t`).
-    if constexpr (UnCVRefBase::has_optimized_storage) {
-      using alt_t = alt_list_at<Index, typename UnCVRefBase::alts>;
+    if constexpr (base.has_optimized_storage) {
+      using alt_t = alt_list_at_t<Index, typename std::remove_cvref_t<VariantBase>::alt_list>;
       auto&& value = std::forward_like<VariantBase>(base.storage_);
       return variant_alt_ref<Index, alt_t::tag, decltype(value)>{value};
 
@@ -166,6 +187,7 @@ struct base {
     }
   }
 
+  // FIXME: Boundary check?
   template <typename Visitor, typename... VariantBases>
   static constexpr decltype(auto) visit_variant_alt(Visitor&& visitor, VariantBases&&... bases) /*noexcept*/ {
     constexpr auto table = make_dispatch_table<Visitor&&, VariantBases&&...>();
@@ -210,7 +232,6 @@ private:
   }
 };
 
-
 struct variant {
   // WARNING: No bounds checking.
   template <std::size_t Index, typename Variant>
@@ -225,49 +246,140 @@ struct variant {
   }
 };
 
-
 namespace visitors {
 
 template <typename VisitorRef>
 struct interleaved {
-  VisitorRef visitor_ref;
+  VisitorRef visitor;
 
-  // FIXME: Boundary check?
   template <typename... VariantAltRefs>
-  constexpr decltype(auto) operator()(VariantAltRefs&&... alt_refs) const /*noexcept*/ {
-    return impl(std::make_index_sequence<2 * sizeof...(VariantAltRefs)>{}, std::forward<VariantAltRefs>(alt_refs)...);
+  constexpr decltype(auto) operator()(VariantAltRefs const&... alt_refs) const /*noexcept*/ {
+    return impl(std::make_index_sequence<2 * sizeof...(VariantAltRefs)>{}, alt_refs...);
   }
 
-private:
   template <std::size_t... Is, typename... VariantAltRefs>
-  constexpr decltype(auto) impl(std::index_sequence<Is...>, VariantAltRefs&&... alt_refs) const /*noexcept*/ {
+  constexpr decltype(auto) impl(std::index_sequence<Is...>, VariantAltRefs const&... alt_refs) const /*noexcept*/ {
     // Helper lambda to project the parameter pack into an interleaved sequence of (tag, value).
     // The mechanism maps a linear index `I` (from 0 to 2N - 1) to the arguments:
     // - `I / 2` selects the specific `variant_alt_ref` from the pack.
     // - `I % 2 == 0` extracts the `tag` (even indices).
     // - `I % 2 != 0` extracts the `value` reference (odd indices).
     auto const tag_or_value = [this, &alt_refs...]<std::size_t I>() /*noexcept*/ -> decltype(auto) {
-      auto const alt_ref = meta::pack::value::strict::at<I / 2>(std::forward<VariantAltRefs>(alt_refs)...);
-      if constexpr (I % 2 == 0) /* tag */ { return tag<decltype(alt_ref)::tag>; }   // clang-format ignore
-      else /* value */ { return alt_ref.ref; }                                      // clang-format ignore
+      auto const& alt_ref = meta::pack::value::strict::at<I / 2>(alt_refs...);
+      if constexpr (I % 2 == 0) /* tag */ { return tag<alt_ref.tag>; }                // clang-format ignore
+      else /* value */ { return static_cast<decltype(alt_ref.ref)>(alt_ref.ref); }    // clang-format ignore
     };
 
-    return std::invoke(static_cast<VisitorRef>(visitor_ref), tag_or_value.template operator()<Is>()...);
+    return std::invoke(static_cast<VisitorRef>(visitor), tag_or_value.template operator()<Is>()...);
   }
+};
+
+template <typename... CaserRefs>
+struct match {
+  std::tuple<CaserRefs...> casers;
+
+  template <typename... VariantAltRefs>
+  constexpr decltype(auto) operator()(VariantAltRefs const&... alt_refs) const /*noexcept*/ {
+    return impl<alt_refs.tag...>(alt_refs...);
+  }
+
+  template <meta::fstr... Tags, typename... VariantAltRefs>
+  constexpr decltype(auto) impl(VariantAltRefs&&... alt_refs) const /*noexcept*/ {
+    auto const& caser = std::apply(
+        [](auto const&... casers) /*noexcept*/ -> auto const& { return first_matched<Tags...>(casers...); }, casers);
+    static_assert(!std::is_same_v<std::remove_cvref_t<decltype(caser)>, none_t>, "???"); // FIXME: ???
+    return std::invoke(static_cast<decltype(caser.func)>(caser.func),
+                       static_cast<decltype(alt_refs.ref)>(alt_refs.ref)...);
+  }
+
+  template <meta::fstr... Tags>
+  static constexpr auto const& first_matched(auto const& caser, auto const&... tail) /*noexcept*/ {
+    if constexpr (caser.template matched<Tags...>) {
+      return caser;
+    } else if constexpr (sizeof...(tail) != 0) {
+      return first_matched<Tags...>(tail...);
+    } else {
+      return none;
+    }
+  };
 };
 
 } // namespace visitors
 
-
 } // namespace variant_detail::access
 
 
-// FIXME: Boundary check?
 template <typename Visitor, typename... Variants>
-static constexpr decltype(auto) visit(Visitor&& visitor, Variants&&... variants) /*noexcept*/ {
+constexpr decltype(auto) visit(Visitor&& visitor, Variants&&... variants) /*noexcept*/ {
   return variant_detail::access::variant::visit_variant_alt(
-      variant_detail::access::visitors::interleaved{std::forward<Visitor>(visitor)},
+      variant_detail::access::visitors::interleaved<Visitor&&>{std::forward<Visitor>(visitor)},
       std::forward<Variants>(variants)...);
+}
+
+inline constexpr meta::fstr __ = "";
+
+template <typename FuncRef, meta::fstr... Tags>
+struct caser {
+  // FIXME: Store value or reference?
+  FuncRef func;
+
+  template <meta::fstr... VariantTags>
+  static constexpr bool matched = ((Tags == VariantTags || Tags == __) && ...);
+};
+
+template <meta::fstr... Tags, typename Func>
+constexpr auto case_(Func&& func) noexcept -> caser<Func&&, Tags...> {
+  return caser<Func&&, Tags...>{std::forward<Func>(func)};
+}
+
+template <typename Caser, typename... Variants>
+inline constexpr bool is_eligible_caser = false;
+
+template <typename Func, meta::fstr... Tags, typename... Variants>
+inline constexpr bool is_eligible_caser<caser<Func, Tags...>, Variants...> = []<std::size_t... Is>(
+                                                                                 std::index_sequence<Is...>) noexcept {
+  constexpr bool is_wildcard[] = {Tags == __...};
+  constexpr std::size_t indices[] = {
+      variant_detail::alt_list_index<Tags, typename std::remove_cvref_t<Variants>::alt_list>...};
+  if constexpr (((!is_wildcard[Is] && indices[Is] == variant_detail::npos) || ...)) {
+    return false;
+  } else {
+    return std::invocable<
+        Func, meta::forward_cvref_t<
+                  Variants, typename std::conditional_t<
+                                is_wildcard[Is], std::type_identity<std::type_identity<Variants>>,
+                                variant_detail::alt_list_at<
+                                    indices[Is], typename std::remove_cvref_t<Variants>::alt_list>>::type::type>...>;
+  }
+}(std::make_index_sequence<sizeof...(Tags)>{});
+
+template <typename Caser, typename... Variants>
+concept eligible_caser = is_eligible_caser<std::remove_cvref_t<Caser>, Variants...>;
+
+template <typename... VariantRefs>
+class matcher {
+public:
+  constexpr explicit matcher(VariantRefs... variants) noexcept : variants_{static_cast<VariantRefs>(variants)...} {}
+
+  template <eligible_caser<VariantRefs...>... Casers>
+  constexpr decltype(auto) operator()(Casers const&... casers) && /*noexcept*/ {
+    return std::apply(
+        [&casers...](VariantRefs... variants) /*noexcept*/ -> decltype(auto) {
+          return variant_detail::access::variant::visit_variant_alt(
+              variant_detail::access::visitors::match{std::forward_as_tuple(casers...)},
+              static_cast<VariantRefs>(variants)...);
+        },
+        std::move(variants_));
+  }
+
+private:
+  // FIXME: Store values or references?
+  std::tuple<VariantRefs...> variants_;
+};
+
+template <typename... Variants>
+constexpr auto match(Variants&&... variants) /*noexcept*/ -> matcher<Variants&&...> {
+  return matcher<Variants&&...>{std::forward<Variants>(variants)...};
 }
 
 
@@ -337,7 +449,7 @@ class variant_base {
 public:
   // FIXME: CPS version.
   // template <template <typename...> typename F> using alts_with = F<Alts...>;
-  using alts = meta::list::list<Alts...>;
+  using alt_list = meta::list::list<Alts...>;
   static constexpr std::size_t size = sizeof...(Alts);
 
   static constexpr bool has_optimized_storage = (is_stateless_alt<Alts> && ...);
@@ -382,10 +494,13 @@ class variant : private
   using base_t = variant_detail::select_smf<Alts...>;
 
 public:
-  template <meta::fstr Tag, typename... Args, std::size_t AltIndex = variant_detail::find_alt_by_tag<Tag, Alts...>(),
-            typename Alt = variant_detail::alt_pack_at<AltIndex, Alts...>>
+  using alt_list = base_t::alt_list;
+  static constexpr std::size_t size = base_t::size;
+
+  template <meta::fstr Tag, typename... Args, std::size_t AltIndex = variant_detail::alt_pack_index<Tag, Alts...>,
+            typename Alt = variant_detail::alt_pack_at_t<AltIndex, Alts...>>
     requires (AltIndex != variant_detail::npos) && // FIXME:
-                                                   // Might be redundant because `alt_pack_at` is already SFINAE
+                                                   // Might be redundant because `alt_pack_at_t` is already SFINAE
                                                    // friendly. The template parameter `Alt` is evaluated before this
                                                    // constraint, leading to unfriendly error messages.
              ((is_stateless_alt<Alt> && sizeof...(Args) == 0) ||

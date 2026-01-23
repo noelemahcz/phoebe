@@ -12,8 +12,7 @@
 namespace meta::pack {
 
 
-inline namespace lazy {
-namespace detail {
+namespace lazy::detail {
 
 #if defined(PHOEBE_IS_CLANG) || defined(PHOEBE_IS_CLANG_CL)
 
@@ -33,15 +32,15 @@ struct at<I, Ts...> {
 // so we fall back to the traditional `void_t` idiom.
 
 template <typename Void, std::size_t I, typename... Ts>
-struct at_impl_helper {};
+struct at_impl {};
 
 template <std::size_t I, typename... Ts>
-struct at_impl_helper<std::void_t<__type_pack_element<I, Ts...>>, I, Ts...> {
+struct at_impl<std::void_t<__type_pack_element<I, Ts...>>, I, Ts...> {
   using type = __type_pack_element<I, Ts...>;
 };
 
 template <std::size_t I, typename... Ts>
-using at_impl = at_impl_helper<void, I, Ts...>;
+using at = at_impl<void, I, Ts...>;
 
 #else
 
@@ -147,8 +146,7 @@ struct at<I, T0, T1, T2, T3, T4, T5, T6, T7, T8, T9, T10, T11, T12, T13, T14, T1
 
 #endif
 
-} // namespace detail
-} // namespace lazy
+} // namespace lazy::detail
 
 
 // FIXME: Move to other place.
@@ -169,13 +167,13 @@ using replicate_with_t = replicate_with<Indices, T, F>::type;
 
 struct any_type {
   template <typename T>
-  constexpr /*explicit*/ any_type(T&&) noexcept {}
+  CONSTEVAL /*explicit*/ any_type(T&&) noexcept {}
 };
 
 template <typename... Dummies>
 struct matcher_impl {
   template <typename T, typename... Tail>
-  static CONSTEVAL auto&& match(Dummies..., T&& value, Tail&&...) noexcept {
+  static constexpr auto&& match(Dummies..., T&& value, Tail&&...) noexcept {
     return std::forward<T>(value);
   }
 };
@@ -198,12 +196,8 @@ struct at {
 
 namespace value::strict::detail {
 
-// NOTE:
-// This function relies on P2280 ("Using unknown pointers and references in constant expressions").
-// Even when called with arguments referring to runtime values, these "unknown references" are valid
-// in a constant expression provided no lvalue-to-rvalue conversion (value reading) occurs.
 template <std::size_t I, typename... Ts>
-CONSTEVAL auto&& at(Ts&&... values) noexcept {
+constexpr auto&& at(Ts&&... values) noexcept {
   return matcher<I>::match(std::forward<Ts>(values)...);
 }
 

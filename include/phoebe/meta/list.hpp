@@ -1,7 +1,7 @@
 #pragma once
 
 
-#include "pack.hpp"
+#include "detail/pack/at.hpp"
 
 #include <cstddef>
 
@@ -35,13 +35,13 @@ template <typename List>
 inline constexpr std::size_t length_v = length<List>::value;
 
 
-inline namespace lazy {
+namespace lazy {
 
 template <std::size_t I, typename List>
 struct at {};
 
 template <std::size_t I, typename... Ts>
-struct at<I, list<Ts...>> : pack::lazy::at<I, Ts...> {};
+struct at<I, list<Ts...>> : pack::lazy::detail::at<I, Ts...> {};
 
 template <std::size_t I, typename List>
 using at_t = at<I, List>::type;
@@ -55,7 +55,7 @@ template <std::size_t I, typename List>
 struct at {};
 
 template <std::size_t I, typename... Ts>
-struct at<I, list<Ts...>> : pack::strict::at<I, Ts...> {};
+struct at<I, list<Ts...>> : pack::strict::detail::at<I, Ts...> {};
 
 template <std::size_t I, typename List>
 using at_t = at<I, List>::type;
@@ -63,4 +63,4 @@ using at_t = at<I, List>::type;
 } // namespace strict
 
 
-} // namespace meta::list2
+} // namespace meta::list

@@ -12,7 +12,7 @@
 namespace meta::pack {
 
 
-inline namespace lazy {
+namespace lazy {
 
 template <std::size_t I, typename... Ts>
 using at = detail::at<I, Ts...>;
@@ -41,6 +41,8 @@ using detail::at;
 }
 
 
+namespace detail {
+
 template <typename T>
 using box = std::type_identity<T>;
 
@@ -56,13 +58,15 @@ struct inherit_all_impl<std::index_sequence<Is...>, Ts...> : indexed_box<Is, Ts>
 template <typename... Ts>
 using inherit_all = inherit_all_impl<std::make_index_sequence<sizeof...(Ts)>, Ts...>;
 
+} // namespace detail
+
 // The fold expression here is evaluated eagerly and does not short-circuit.
 // Short-circuiting would only be meaningful if there were a large number
 // of types with duplicates, which is expected to be rare.
 template <typename... Ts>
 inline constexpr bool has_no_duplicates_v =
     // NOTE: Fold expressions with `&&` evaluate to `true` for an empty pack.
-    (std::is_convertible_v<inherit_all<Ts...>, box<Ts>> && ...);
+    (std::is_convertible_v<detail::inherit_all<Ts...>, detail::box<Ts>> && ...);
 
 template <typename... Ts>
 struct has_no_duplicates : std::bool_constant<has_no_duplicates_v<Ts...>> {};
